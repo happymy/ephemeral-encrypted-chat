@@ -322,11 +322,12 @@ function getHTML() {
           }
           if (msg === "!peer_joined") {
             addMessage("一位用户加入了频道", false, "系统", "#666", true);
-            showGenericNotification("一位用户加入了频道");
+            showGenericNotification("注意，一位用户加入了频道，如何没有对应的昵称信息，请立即销毁频道，以防泄密风险！");
             return;
           }
           if (msg === "!peer_left") {
             addMessage("一位用户离开了频道", false, "系统", "#666", true);
+            showGenericNotification("一位用户离开了频道");
             return;
           }
         }
