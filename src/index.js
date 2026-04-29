@@ -54,7 +54,6 @@ function getHTML() {
     .input-area button { padding: 10px 20px; border: none; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer; }
     .warning { color: #f87171; text-align: center; padding: 8px; font-size: 0.9em; }
 
-    /* 昵称模态框 */
     .modal-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center;
@@ -74,7 +73,6 @@ function getHTML() {
       background: #3b82f6; color: #fff; cursor: pointer; font-size: 1em;
     }
 
-    /* 通知容器 */
     #notificationContainer {
       position: fixed; top: 16px; right: 16px; z-index: 999;
       display: flex; flex-direction: column; gap: 8px; max-width: 300px;
@@ -96,7 +94,6 @@ function getHTML() {
   </style>
 </head>
 <body>
-  <!-- 昵称输入模态框 -->
   <div id="nameModal" class="modal-overlay">
     <div class="modal">
       <h2>设置你的昵称</h2>
@@ -104,7 +101,6 @@ function getHTML() {
       <button id="nameConfirmBtn">进入聊天室</button>
     </div>
   </div>
-  <!-- 通知容器 -->
   <div id="notificationContainer"></div>
 
   <div class="container">
@@ -160,17 +156,14 @@ function getHTML() {
       return USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
     }
 
-    // ✅ 颜色值安全校验：只允许 # 后跟 6 位十六进制字符（支持大小写）
     function isValidColor(str) {
       return /^#[0-9a-fA-F]{6}$/.test(str);
     }
 
-    // ✅ 取安全颜色：如果无效或缺失，返回默认灰色
     function safeColor(color) {
       return (typeof color === "string" && isValidColor(color)) ? color : "#888888";
     }
 
-    // ---------- 身份 ----------
     let myName = randomName();
     let myColor = randomColor();
 
@@ -238,14 +231,24 @@ function getHTML() {
     let roomId = null;
     let ws = null;
 
-    // ---------- 通知管理 ----------
+    // 显示通知（color 已安全过滤）
     function showNotification(name, color) {
-      // 修复：颜色只在合法时使用，否则用默认灰色
       const safeCol = safeColor(color);
       const div = document.createElement("div");
       div.className = "notification";
       div.style.borderLeftColor = safeCol;
       div.innerHTML = \`<span>\${escapeHtml(name)} 加入了频道</span><button class="close-btn">&times;</button>\`;
+      div.querySelector(".close-btn").addEventListener("click", () => {
+        div.remove();
+      });
+      notificationContainer.appendChild(div);
+    }
+
+    function showGenericNotification(message) {
+      const div = document.createElement("div");
+      div.className = "notification";
+      div.style.borderLeftColor = "#666";
+      div.innerHTML = \`<span>\${escapeHtml(message)}</span><button class="close-btn">&times;</button>\`;
       div.querySelector(".close-btn").addEventListener("click", () => {
         div.remove();
       });
@@ -258,7 +261,6 @@ function getHTML() {
       return div.innerHTML;
     }
 
-    // ---------- 房间初始化 ----------
     async function initFromHash() {
       const hash = window.location.hash.substring(1);
       if (hash) {
@@ -294,7 +296,7 @@ function getHTML() {
       ws.onopen = async () => {
         statusDiv.textContent = "已连接（加密频道）";
         statusDiv.style.color = "#4ade80";
-        // 发送加入通知
+        // 仍发送昵称加入通知（用于显示自定义昵称）
         try {
           const joinPayload = JSON.stringify({ type: "join", name: myName, color: myColor });
           const cipher = await encrypt(cryptoKey, joinPayload);
@@ -307,18 +309,29 @@ function getHTML() {
       ws.onmessage = async (event) => {
         const msg = event.data;
 
-        // 处理销毁通知
-        if (typeof msg === "string" && msg === "!channel_destroyed") {
-          statusDiv.textContent = "频道已被销毁";
-          statusDiv.style.color = "#f87171";
-          messageInput.disabled = true;
-          sendBtn.disabled = true;
-          addMessage("💣 频道已被销毁，请关闭页面或刷新", false, "系统", "#ff4444", true);
-          try { ws.close(); } catch (e) {}
-          return;
+        // 处理服务端控制消息（明文）
+        if (typeof msg === "string") {
+          if (msg === "!channel_destroyed") {
+            statusDiv.textContent = "频道已被销毁";
+            statusDiv.style.color = "#f87171";
+            messageInput.disabled = true;
+            sendBtn.disabled = true;
+            addMessage("💣 频道已被销毁，请关闭页面或刷新", false, "系统", "#ff4444", true);
+            try { ws.close(); } catch (e) {}
+            return;
+          }
+          if (msg === "!peer_joined") {
+            addMessage("一位用户加入了频道", false, "系统", "#666", true);
+            showGenericNotification("一位用户加入了频道");
+            return;
+          }
+          if (msg === "!peer_left") {
+            addMessage("一位用户离开了频道", false, "系统", "#666", true);
+            return;
+          }
         }
 
-        // 解密消息
+        // 加密消息处理
         try {
           const plain = await decrypt(cryptoKey, msg);
           let data;
@@ -328,7 +341,7 @@ function getHTML() {
             data = { name: "未知", color: "#999", text: plain };
           }
 
-          // 处理加入通知
+          // 客户端昵称加入通知
           if (data.type === "join") {
             const safeCol = safeColor(data.color);
             showNotification(data.name, safeCol);
@@ -336,9 +349,7 @@ function getHTML() {
             return;
           }
 
-          // 普通消息
           const { name, color, text } = data;
-          // 修复：颜色经安全过滤后传入展示函数
           addMessage(text, false, name, safeColor(color));
         } catch (e) {
           console.warn("解密失败，消息已丢弃", e);
@@ -356,10 +367,8 @@ function getHTML() {
       };
     }
 
-    // ✅ 修复后的 addMessage：安全颜色作为 senderColor 传入，直接使用
     function addMessage(text, isSelf, senderName = "", senderColor = "#888888", isSystem = false) {
       const div = document.createElement("div");
-      // senderColor 已经过 safeColor 过滤，这里无需再次过滤
       if (isSystem) {
         div.className = "msg system";
         div.innerHTML = escapeHtml(text);
@@ -416,7 +425,6 @@ function getHTML() {
       if (ws) ws.close();
     });
 
-    // 用户名确认
     nameConfirmBtn.addEventListener("click", () => {
       const inputName = nameInput.value.trim();
       if (inputName) myName = inputName;
@@ -430,7 +438,6 @@ function getHTML() {
       }
     });
 
-    // ---------- 启动 ----------
     (async () => {
       const hasValidHash = await initFromHash();
       if (!hasValidHash) {
@@ -438,7 +445,6 @@ function getHTML() {
       } else {
         roomUrlInput.value = window.location.href;
       }
-      // 模态框已显示，等待用户确认后 connect()
     })();
   </script>
 </body>

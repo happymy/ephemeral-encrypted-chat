@@ -4,37 +4,45 @@ export class ChatRoom {
     this.env = env;
   }
 
-  // 处理 WebSocket 升级请求
   async fetch(request) {
     const pair = new WebSocketPair();
     const [server, client] = Object.values(pair);
 
+    // 接受服务端 WebSocket
     this.state.acceptWebSocket(server);
+
+    // 取消自动销毁倒计时
     await this.state.storage.deleteAlarm();
+
+    // 广播加入事件给其他客户端（须在 accept 之后，用 setTimeout 确保连接已注册）
+    setTimeout(() => {
+      const sockets = this.state.getWebSockets();
+      for (const socket of sockets) {
+        if (socket !== server) {
+          socket.send("!peer_joined");
+        }
+      }
+    }, 0);
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  // 收到消息
   async webSocketMessage(ws, message) {
-    // ----- 销毁频道指令 -----
+    // 销毁频道指令
     if (message === "!destroy") {
       const sockets = this.state.getWebSockets();
-      // 1. 通知所有客户端
       for (const socket of sockets) {
         socket.send("!channel_destroyed");
       }
-      // 2. 关闭所有连接
       for (const socket of sockets) {
-        socket.close(1000, "Channel destroyed by user");
+        socket.close(1000, "Channel destroyed");
       }
-      // 3. 清除存储并立即终止 DO 实例
       await this.state.storage.deleteAll();
       this.state.abortController?.abort();
       return;
     }
 
-    // ----- 普通消息广播（加密内容） -----
+    // 普通加密消息广播（排除发送者）
     const sockets = this.state.getWebSockets();
     for (const socket of sockets) {
       if (socket !== ws) {
@@ -43,12 +51,24 @@ export class ChatRoom {
     }
   }
 
-  // 客户端关闭时检查是否需要自动销毁
   async webSocketClose(ws, code, reason, wasClean) {
+    // 广播离开事件给其他客户端
+    const sockets = this.state.getWebSockets();
+    for (const socket of sockets) {
+      if (socket !== ws) {
+        socket.send("!peer_left");
+      }
+    }
     await this.maybeScheduleDestruction();
   }
 
   async webSocketError(ws, error) {
+    const sockets = this.state.getWebSockets();
+    for (const socket of sockets) {
+      if (socket !== ws) {
+        socket.send("!peer_left");
+      }
+    }
     await this.maybeScheduleDestruction();
   }
 
