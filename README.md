@@ -53,6 +53,9 @@ class_name = "ChatRoom"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
+
+[vars]
+CHAT_PATH = "/chat"
 ```
 
 #### 3. 部署到 Cloudflare
