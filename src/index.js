@@ -1,33 +1,27 @@
-// 引入 Durable Object 类
 export { ChatRoom } from "./chat-room";
 
-// 处理 HTTP 请求
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+// Nginx 伪装页 HTML
+function getNginxHTML() {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+    body { width: 35em; margin: 0 auto; font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and working. Further configuration is required.</p>
+<p>For online documentation and support please refer to <a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at <a href="http://nginx.com/">nginx.com</a>.</p>
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>`;
+}
 
-    // WebSocket 升级请求 → 交给 Durable Object
-    if (request.headers.get("Upgrade") === "websocket") {
-      const roomId = url.searchParams.get("room");
-      if (!roomId) {
-        return new Response("Missing room ID", { status: 400 });
-      }
-
-      // 用 roomId 创建或获取 Durable Object
-      const id = env.CHAT_ROOM.idFromName(roomId);
-      const stub = env.CHAT_ROOM.get(id);
-      return stub.fetch(request);
-    }
-
-    // 普通 HTTP → 返回前端聊天页面
-    return new Response(getHTML(), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
-  },
-};
-
-// 内联前端页面（生产环境可单独部署）
-function getHTML() {
+// 聊天室页面 HTML（注入 CHAT_PATH）
+function getChatHTML(chatPath) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -120,6 +114,9 @@ function getHTML() {
   </div>
 
   <script type="module">
+    // 由服务端注入的聊天路径
+    window.CHAT_PATH = "${chatPath}";
+
     // ---------- 工具函数 ----------
     function buf2base64(buf) {
       let binary = "";
@@ -291,7 +288,9 @@ function getHTML() {
 
     function connect() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = \`\${protocol}//\${window.location.host}/?room=\${roomId}\`;
+      // 使用注入的路径构建 WebSocket URL
+      const wsPath = (window.CHAT_PATH || "/chat").replace(/\\/$/, '') + "/";
+      const wsUrl = \`\${protocol}//\${window.location.host}\${wsPath}?room=\${roomId}\`;
       ws = new WebSocket(wsUrl);
 
       ws.onopen = async () => {
@@ -383,7 +382,6 @@ function getHTML() {
 
     async function sendMessage(plainText) {
       if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
-      // 消息长度限制（4000 字符）
       if (typeof plainText !== "string" || plainText.length > 4000) {
         alert("消息过长，最多允许 4000 字符");
         return;
@@ -429,7 +427,7 @@ function getHTML() {
 
     nameConfirmBtn.addEventListener("click", () => {
       let inputName = nameInput.value.trim();
-      if (inputName.length > 20) inputName = inputName.slice(0, 20); // 二次裁剪
+      if (inputName.length > 20) inputName = inputName.slice(0, 20);
       if (inputName) myName = inputName;
       nameModal.style.display = "none";
       connect();
@@ -453,3 +451,49 @@ function getHTML() {
 </body>
 </html>`;
 }
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // 读取自定义路径，默认为 /chat，确保以 / 开头
+    let chatPath = (env.CHAT_PATH || "/chat").trim();
+    if (!chatPath.startsWith("/")) {
+      chatPath = "/" + chatPath;
+    }
+
+    // 判断是否为 WebSocket 升级请求
+    if (request.headers.get("Upgrade") === "websocket") {
+      // 只处理聊天路径下的 WebSocket
+      if (path === chatPath || path === chatPath + "/") {
+        const roomId = url.searchParams.get("room");
+        if (!roomId) {
+          return new Response("Missing room ID", { status: 400 });
+        }
+        const id = env.CHAT_ROOM.idFromName(roomId);
+        const stub = env.CHAT_ROOM.get(id);
+        return stub.fetch(request);
+      } else {
+        // 其他路径的 WebSocket 请求返回 404
+        return new Response("Not Found", { status: 404 });
+      }
+    }
+
+    // 普通 HTTP 请求：区分聊天页面与伪装页面
+    if (path === chatPath || path === chatPath + "/") {
+      return new Response(getChatHTML(chatPath), {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Security-Policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+          "Referrer-Policy": "no-referrer"
+        }
+      });
+    }
+
+    // 其他所有路径返回 Nginx 伪装页
+    return new Response(getNginxHTML(), {
+      headers: { "Content-Type": "text/html; charset=utf-8" }
+    });
+  }
+};
