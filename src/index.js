@@ -53,6 +53,7 @@ function getHTML() {
     .input-area input { flex: 1; padding: 10px; border: 1px solid #444; border-radius: 6px; background: #333; color: #fff; }
     .input-area button { padding: 10px 20px; border: none; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer; }
     .warning { color: #f87171; text-align: center; padding: 8px; font-size: 0.9em; }
+    .info { color: #fbbf24; text-align: center; padding: 4px; font-size: 0.8em; background: #1a1a1a; }
 
     .modal-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -97,7 +98,7 @@ function getHTML() {
   <div id="nameModal" class="modal-overlay">
     <div class="modal">
       <h2>设置你的昵称</h2>
-      <input type="text" id="nameInput" placeholder="输入昵称（留空随机）" maxlength="12" />
+      <input type="text" id="nameInput" placeholder="输入昵称（留空随机，最长12字符）" maxlength="12" />
       <button id="nameConfirmBtn">进入聊天室</button>
     </div>
   </div>
@@ -115,6 +116,7 @@ function getHTML() {
       <button id="sendBtn">发送</button>
     </div>
     <div class="warning" id="status">正在连接...</div>
+    <div class="info">⚠️ 此链接包含密钥，请勿公开分享</div>
   </div>
 
   <script type="module">
@@ -231,7 +233,6 @@ function getHTML() {
     let roomId = null;
     let ws = null;
 
-    // 显示通知（color 已安全过滤）
     function showNotification(name, color) {
       const safeCol = safeColor(color);
       const div = document.createElement("div");
@@ -296,7 +297,6 @@ function getHTML() {
       ws.onopen = async () => {
         statusDiv.textContent = "已连接（加密频道）";
         statusDiv.style.color = "#4ade80";
-        // 仍发送昵称加入通知（用于显示自定义昵称）
         try {
           const joinPayload = JSON.stringify({ type: "join", name: myName, color: myColor });
           const cipher = await encrypt(cryptoKey, joinPayload);
@@ -309,7 +309,6 @@ function getHTML() {
       ws.onmessage = async (event) => {
         const msg = event.data;
 
-        // 处理服务端控制消息（明文）
         if (typeof msg === "string") {
           if (msg === "!channel_destroyed") {
             statusDiv.textContent = "频道已被销毁";
@@ -327,12 +326,10 @@ function getHTML() {
           }
           if (msg === "!peer_left") {
             addMessage("一位用户离开了频道", false, "系统", "#666", true);
-            showGenericNotification("一位用户离开了频道");
             return;
           }
         }
 
-        // 加密消息处理
         try {
           const plain = await decrypt(cryptoKey, msg);
           let data;
@@ -342,7 +339,6 @@ function getHTML() {
             data = { name: "未知", color: "#999", text: plain };
           }
 
-          // 客户端昵称加入通知
           if (data.type === "join") {
             const safeCol = safeColor(data.color);
             showNotification(data.name, safeCol);
@@ -387,6 +383,11 @@ function getHTML() {
 
     async function sendMessage(plainText) {
       if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
+      // 消息长度限制（4000 字符）
+      if (typeof plainText !== "string" || plainText.length > 4000) {
+        alert("消息过长，最多允许 4000 字符");
+        return;
+      }
       const payload = JSON.stringify({ name: myName, color: myColor, text: plainText });
       const cipherB64 = await encrypt(cryptoKey, payload);
       ws.send(cipherB64);
@@ -427,7 +428,8 @@ function getHTML() {
     });
 
     nameConfirmBtn.addEventListener("click", () => {
-      const inputName = nameInput.value.trim();
+      let inputName = nameInput.value.trim();
+      if (inputName.length > 20) inputName = inputName.slice(0, 20); // 二次裁剪
       if (inputName) myName = inputName;
       nameModal.style.display = "none";
       connect();

@@ -2,19 +2,17 @@ export class ChatRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.rateMap = new Map(); // 存放每个 WebSocket 的发送时间戳数组
   }
 
   async fetch(request) {
     const pair = new WebSocketPair();
     const [server, client] = Object.values(pair);
 
-    // 接受服务端 WebSocket
     this.state.acceptWebSocket(server);
-
-    // 取消自动销毁倒计时
     await this.state.storage.deleteAlarm();
 
-    // 广播加入事件给其他客户端（须在 accept 之后，用 setTimeout 确保连接已注册）
+    // 广播加入事件给其他客户端
     setTimeout(() => {
       const sockets = this.state.getWebSockets();
       for (const socket of sockets) {
@@ -27,8 +25,32 @@ export class ChatRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // 频率检查：每连接每秒最多 3 条消息
+  checkRateLimit(ws) {
+    const now = Date.now();
+    let timestamps = this.rateMap.get(ws) || [];
+    // 清除 1 秒前的记录
+    timestamps = timestamps.filter(t => now - t < 1000);
+    if (timestamps.length >= 3) return false; // 超限
+    timestamps.push(now);
+    this.rateMap.set(ws, timestamps);
+    return true;
+  }
+
+  // 清理连接相关的速率记录
+  cleanRateLimit(ws) {
+    this.rateMap.delete(ws);
+  }
+
   async webSocketMessage(ws, message) {
-    // 销毁频道指令
+    // 大小限制（16 KB）
+    const msgSize = typeof message === "string" ? message.length : (message.byteLength || 0);
+    if (msgSize > 16384) return;
+
+    // 频率限制
+    if (!this.checkRateLimit(ws)) return;
+
+    // 销毁指令
     if (message === "!destroy") {
       const sockets = this.state.getWebSockets();
       for (const socket of sockets) {
@@ -38,11 +60,11 @@ export class ChatRoom {
         socket.close(1000, "Channel destroyed");
       }
       await this.state.storage.deleteAll();
-      this.state.abortController?.abort();
+      // 移除无效的 abortController 代码，只需清理即可
       return;
     }
 
-    // 普通加密消息广播（排除发送者）
+    // 广播加密消息（排除发送者）
     const sockets = this.state.getWebSockets();
     for (const socket of sockets) {
       if (socket !== ws) {
@@ -52,21 +74,29 @@ export class ChatRoom {
   }
 
   async webSocketClose(ws, code, reason, wasClean) {
-    // 广播离开事件给其他客户端
+    this.cleanRateLimit(ws);
+    // 广播离开事件，捕获可能的异常
     const sockets = this.state.getWebSockets();
     for (const socket of sockets) {
       if (socket !== ws) {
-        socket.send("!peer_left");
+        try {
+          socket.send("!peer_left");
+        } catch (e) {
+          // 忽略已断开的连接
+        }
       }
     }
     await this.maybeScheduleDestruction();
   }
 
   async webSocketError(ws, error) {
+    this.cleanRateLimit(ws);
     const sockets = this.state.getWebSockets();
     for (const socket of sockets) {
       if (socket !== ws) {
-        socket.send("!peer_left");
+        try {
+          socket.send("!peer_left");
+        } catch (e) {}
       }
     }
     await this.maybeScheduleDestruction();
@@ -83,7 +113,6 @@ export class ChatRoom {
     const sockets = this.state.getWebSockets();
     if (sockets.length === 0) {
       await this.state.storage.deleteAll();
-      this.state.abortController?.abort();
     }
   }
 }
