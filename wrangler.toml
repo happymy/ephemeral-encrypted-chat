@@ -12,3 +12,4 @@ new_sqlite_classes = ["ChatRoom"]
 
 [vars]
 CHAT_PATH = "/chat"
+INACTIVITY_TIMEOUT_SECONDS = "300"

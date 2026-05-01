@@ -49,6 +49,16 @@ function getChatHTML(chatPath) {
     .warning { color: #f87171; text-align: center; padding: 8px; font-size: 0.9em; }
     .info { color: #fbbf24; text-align: center; padding: 4px; font-size: 0.8em; background: #1a1a1a; }
 
+    #inactivityWarning {
+      background: #b91c1c;
+      color: #fff;
+      text-align: center;
+      padding: 10px;
+      font-weight: bold;
+      display: none;
+      flex-shrink: 0;
+    }
+
     .modal-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center;
@@ -104,6 +114,7 @@ function getChatHTML(chatPath) {
       <button id="copyBtn">复制链接</button>
       <button id="destroyBtn" title="销毁频道">💣</button>
     </div>
+    <div id="inactivityWarning"></div>
     <div id="messages"></div>
     <div class="input-area">
       <input id="messageInput" type="text" placeholder="输入消息，回车发送..." autofocus />
@@ -114,8 +125,8 @@ function getChatHTML(chatPath) {
   </div>
 
   <script type="module">
-    // 由服务端注入的聊天路径
-    window.CHAT_PATH = "${chatPath}";
+    // 由服务端注入的聊天路径（已安全转义）
+    window.CHAT_PATH = ${JSON.stringify(chatPath)};
 
     // ---------- 工具函数 ----------
     function buf2base64(buf) {
@@ -218,6 +229,7 @@ function getChatHTML(chatPath) {
     const nameInput = document.getElementById("nameInput");
     const nameConfirmBtn = document.getElementById("nameConfirmBtn");
     const notificationContainer = document.getElementById("notificationContainer");
+    const inactivityWarningDiv = document.getElementById("inactivityWarning");
     const messagesDiv = document.getElementById("messages");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
@@ -229,6 +241,34 @@ function getChatHTML(chatPath) {
     let cryptoKey = null;
     let roomId = null;
     let ws = null;
+    let inactivityCountdown = null;
+
+    function showInactivityWarning(seconds) {
+      const remaining = parseInt(seconds, 10) || 30;
+      if (inactivityCountdown) clearInterval(inactivityCountdown);
+      inactivityWarningDiv.style.display = 'block';
+      let remainingSec = remaining;
+      const update = () => {
+        if (remainingSec <= 0) {
+          clearInterval(inactivityCountdown);
+          inactivityCountdown = null;
+          inactivityWarningDiv.textContent = '💣 频道已销毁';
+          return;
+        }
+        inactivityWarningDiv.textContent = \`⏳ 由于不活动，频道将在 \${remainingSec} 秒后自动销毁\`;
+        remainingSec--;
+      };
+      update();
+      inactivityCountdown = setInterval(update, 1000);
+    }
+
+    function clearInactivityWarning() {
+      if (inactivityCountdown) {
+        clearInterval(inactivityCountdown);
+        inactivityCountdown = null;
+      }
+      inactivityWarningDiv.style.display = 'none';
+    }
 
     function showNotification(name, color) {
       const safeCol = safeColor(color);
@@ -288,7 +328,6 @@ function getChatHTML(chatPath) {
 
     function connect() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      // 使用注入的路径构建 WebSocket URL
       const wsPath = (window.CHAT_PATH || "/chat").replace(/\\/$/, '') + "/";
       const wsUrl = \`\${protocol}//\${window.location.host}\${wsPath}?room=\${roomId}\`;
       ws = new WebSocket(wsUrl);
@@ -310,6 +349,7 @@ function getChatHTML(chatPath) {
 
         if (typeof msg === "string") {
           if (msg === "!channel_destroyed") {
+            clearInactivityWarning();
             statusDiv.textContent = "频道已被销毁";
             statusDiv.style.color = "#f87171";
             messageInput.disabled = true;
@@ -327,10 +367,32 @@ function getChatHTML(chatPath) {
             addMessage("一位用户离开了频道", false, "系统", "#666", true);
             return;
           }
+          if (msg.startsWith("!inactivity_warning:")) {
+            const seconds = msg.split(":")[1];
+            showInactivityWarning(seconds);
+            return;
+          }
+          if (msg === "!inactivity_reset") {
+            clearInactivityWarning();
+            return;
+          }
+          if (msg === "!rate_limited") {
+            statusDiv.textContent = "发送太频繁，请稍候...";
+            statusDiv.style.color = "#fbbf24";
+            setTimeout(() => {
+              if (statusDiv.textContent === "发送太频繁，请稍候...") {
+                statusDiv.textContent = "已连接（加密频道）";
+                statusDiv.style.color = "#4ade80";
+              }
+            }, 2000);
+            return;
+          }
         }
 
         try {
           const plain = await decrypt(cryptoKey, msg);
+          clearInactivityWarning();
+
           let data;
           try {
             data = JSON.parse(plain);
@@ -353,6 +415,7 @@ function getChatHTML(chatPath) {
       };
 
       ws.onclose = () => {
+        clearInactivityWarning();
         statusDiv.textContent = "连接已断开，刷新页面重连";
         statusDiv.style.color = "#f87171";
       };
@@ -485,15 +548,22 @@ export default {
       return new Response(getChatHTML(chatPath), {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
-          "Content-Security-Policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-          "Referrer-Policy": "no-referrer"
-        }
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "Content-Security-Policy":
+            "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+          "Referrer-Policy": "no-referrer",
+        },
       });
     }
 
     // 其他所有路径返回 Nginx 伪装页
     return new Response(getNginxHTML(), {
-      headers: { "Content-Type": "text/html; charset=utf-8" }
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+      },
     });
-  }
+  },
 };
