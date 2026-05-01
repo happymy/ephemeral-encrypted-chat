@@ -20,8 +20,8 @@ Commercial support is available at <a href="http://nginx.com/">nginx.com</a>.</p
 </html>`;
 }
 
-// 聊天室页面 HTML（注入 CHAT_PATH）
-function getChatHTML(chatPath) {
+// 聊天室页面 HTML（注入 CHAT_PATH 和 CLEAR_ON_DESTROY）
+function getChatHTML(chatPath, clearOnDestroy) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -116,7 +116,7 @@ function getChatHTML(chatPath) {
     </div>
     <div id="inactivityWarning"></div>
     <div id="messages"></div>
-    <div class="input-area">
+    <div class="input-area" id="inputArea">
       <input id="messageInput" type="text" placeholder="输入消息，回车发送..." autofocus />
       <button id="sendBtn">发送</button>
     </div>
@@ -125,8 +125,9 @@ function getChatHTML(chatPath) {
   </div>
 
   <script type="module">
-    // 由服务端注入的聊天路径（已安全转义）
+    // 由服务端注入的聊天路径和清空标志（已安全转义）
     window.CHAT_PATH = ${JSON.stringify(chatPath)};
+    window.CLEAR_ON_DESTROY = ${JSON.stringify(clearOnDestroy)};
 
     // ---------- 工具函数 ----------
     function buf2base64(buf) {
@@ -354,7 +355,20 @@ function getChatHTML(chatPath) {
             statusDiv.style.color = "#f87171";
             messageInput.disabled = true;
             sendBtn.disabled = true;
-            addMessage("💣 频道已被销毁，请关闭页面或刷新", false, "系统", "#ff4444", true);
+
+            if (window.CLEAR_ON_DESTROY === "1") {
+              // 清空所有聊天内容和通知
+              messagesDiv.innerHTML = "";
+              notificationContainer.innerHTML = "";
+              document.getElementById("inputArea").style.display = "none";
+              addMessage("💣 频道已被销毁，页面内容已清空", false, "系统", "#ff4444", true);
+              setTimeout(() => {
+                statusDiv.textContent = "频道已销毁，请关闭页面或刷新";
+              }, 3000);
+            } else {
+              addMessage("💣 频道已被销毁，请关闭页面或刷新", false, "系统", "#ff4444", true);
+            }
+
             try { ws.close(); } catch (e) {}
             return;
           }
@@ -526,6 +540,9 @@ export default {
       chatPath = "/" + chatPath;
     }
 
+    // 读取清空页面标志（默认 "1"）
+    const clearOnDestroy = env.CLEAR_ON_DESTROY || "1";
+
     // 判断是否为 WebSocket 升级请求
     if (request.headers.get("Upgrade") === "websocket") {
       // 只处理聊天路径下的 WebSocket
@@ -545,15 +562,14 @@ export default {
 
     // 普通 HTTP 请求：区分聊天页面与伪装页面
     if (path === chatPath || path === chatPath + "/") {
-      return new Response(getChatHTML(chatPath), {
+      return new Response(getChatHTML(chatPath, clearOnDestroy), {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "X-Content-Type-Options": "nosniff",
           "X-Frame-Options": "DENY",
-          "Content-Security-Policy":
-            "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-          "Referrer-Policy": "no-referrer",
-        },
+          "Content-Security-Policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+          "Referrer-Policy": "no-referrer"
+        }
       });
     }
 
@@ -562,8 +578,8 @@ export default {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-      },
+        "X-Frame-Options": "DENY"
+      }
     });
-  },
+  }
 };

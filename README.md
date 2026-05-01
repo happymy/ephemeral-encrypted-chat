@@ -28,6 +28,7 @@
 2. 编辑 `wrangler.toml`，设置必要的环境变量：
    - `CHAT_PATH`：自定义聊天页面路径，默认为 `/chat`。
    - `INACTIVITY_TIMEOUT_SECONDS`：无新消息自动销毁超时秒数，默认 `300`（5 分钟），设为 `0` 可禁用。
+   - `CLEAR_ON_DESTROY`：销毁频道后是否清空页面内容，默认 1（清空），设为 0 保留聊天记录。
 3. 执行 `wrangler deploy` 部署到 Cloudflare Workers。
 4. 部署完成后，访问分配的 `*.workers.dev` 域名并加上聊天路径即可使用。
 
