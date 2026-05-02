@@ -20,8 +20,8 @@ Commercial support is available at <a href="http://nginx.com/">nginx.com</a>.</p
 </html>`;
 }
 
-// 聊天室页面 HTML（注入 CHAT_PATH 和 CLEAR_ON_DESTROY）
-function getChatHTML(chatPath, clearOnDestroy) {
+// 聊天室页面 HTML（注入 CHAT_PATH, CLEAR_ON_DESTROY, CLEAR_ON_DISCONNECT）
+function getChatHTML(chatPath, clearOnDestroy, clearOnDisconnect) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -128,6 +128,7 @@ function getChatHTML(chatPath, clearOnDestroy) {
     // 由服务端注入的聊天路径和清空标志（已安全转义）
     window.CHAT_PATH = ${JSON.stringify(chatPath)};
     window.CLEAR_ON_DESTROY = ${JSON.stringify(clearOnDestroy)};
+    window.CLEAR_ON_DISCONNECT = ${JSON.stringify(clearOnDisconnect)};
 
     // ---------- 工具函数 ----------
     function buf2base64(buf) {
@@ -432,6 +433,19 @@ function getChatHTML(chatPath, clearOnDestroy) {
         clearInactivityWarning();
         statusDiv.textContent = "连接已断开，刷新页面重连";
         statusDiv.style.color = "#f87171";
+        
+        // 根据环境变量决定是否清空历史消息
+        if (window.CLEAR_ON_DISCONNECT === "1") {
+          // 清空所有聊天内容和通知
+          messagesDiv.innerHTML = "";
+          notificationContainer.innerHTML = "";
+          // 可选：禁用输入区域或显示提示
+          messageInput.disabled = true;
+          sendBtn.disabled = true;
+          addMessage("🔌 连接已断开，页面内容已清空", false, "系统", "#ff4444", true);
+        } else {
+          addMessage("🔌 连接已断开，请刷新页面重连", false, "系统", "#ff4444", true);
+        }
       };
 
       ws.onerror = () => {
@@ -542,6 +556,9 @@ export default {
 
     // 读取清空页面标志（默认 "1"）
     const clearOnDestroy = env.CLEAR_ON_DESTROY || "1";
+    
+    // 读取断开连接时清空标志（默认 "1"）
+    const clearOnDisconnect = env.CLEAR_ON_DISCONNECT || "1";
 
     // 判断是否为 WebSocket 升级请求
     if (request.headers.get("Upgrade") === "websocket") {
@@ -562,7 +579,7 @@ export default {
 
     // 普通 HTTP 请求：区分聊天页面与伪装页面
     if (path === chatPath || path === chatPath + "/") {
-      return new Response(getChatHTML(chatPath, clearOnDestroy), {
+      return new Response(getChatHTML(chatPath, clearOnDestroy, clearOnDisconnect), {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "X-Content-Type-Options": "nosniff",

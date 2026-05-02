@@ -14,3 +14,4 @@ new_sqlite_classes = ["ChatRoom"]
 CHAT_PATH = "/chat"
 INACTIVITY_TIMEOUT_SECONDS = "300"
 CLEAR_ON_DESTROY = "1"
+CLEAR_ON_DISCONNECT = "1"
